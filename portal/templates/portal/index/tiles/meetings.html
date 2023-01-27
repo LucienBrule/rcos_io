@@ -1,19 +1,23 @@
 {% load crispy_forms_tags %}
 <h2 class="title is-4 mb-2">Meetings</h2>
 
+{% if ongoing_meeting %}
 <form action="{% url 'submit_attendance' %}" method="post">
     {% csrf_token %}
 
-    <div class="columns">
-        <div class="column">
-            {{ submit_attendance_form|crispy }}
+    <label for="attendance-code" class="label">Meeting Attendance</label>
+    <div class="field has-addons">
+        <div class="control is-flex-grow-1">
+          <input type="text" id="attendance-code" name="code" type="text" required placeholder="Attendance code" class="input">
         </div>
-    </div>
+        <div class="control">
+          <button type="submit" class="button">
+            Submit
+          </button>
+        </div>
+      </div>
 </form>
 <hr>
-
-{% if ongoing_meeting %}
-
 <small class="has-text-grey is-block">Ongoing Meeting
     {% if ongoing_meeting.location %}
     at <strong>{{ ongoing_meeting.location }}</strong></small>

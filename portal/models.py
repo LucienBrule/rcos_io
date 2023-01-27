@@ -2,6 +2,7 @@ import logging
 import re
 from time import sleep
 from typing import Optional, Tuple, cast
+from django.core.cache import cache
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser, BaseUserManager
@@ -15,6 +16,7 @@ from django.utils import formats, timezone
 from requests import HTTPError
 from sentry_sdk import capture_exception
 from django.db.models.functions import Lower
+from django.core.validators import MaxValueValidator, MinValueValidator
 
 from portal.services import discord
 
@@ -47,7 +49,7 @@ class Semester(TimestampedModel):
         max_length=30, help_text="User-facing name of semester, e.g. Fall 2024"
     )
 
-    mentor_application_deadline = models.BooleanField(
+    mentor_application_deadline = models.DateTimeField(
         help_text="The last date students can apply to be Mentors for this semester",
         blank=True,
         null=True,
@@ -189,7 +191,7 @@ class UserManager(BaseUserManager):
         return self._create_user(email, password, **extra_fields)
 
 
-class StudentManager(BaseUserManager):
+class RPIUserManager(BaseUserManager):
     def get_queryset(self):
         return (
             super()
@@ -239,6 +241,7 @@ class User(AbstractUser, TimestampedModel):
         null=True,
         blank=True,
         help_text="If the user is an RPI user, their graduation year.",
+        validators=[MaxValueValidator(2028), MinValueValidator(1950)],
     )
 
     # Account integrations
@@ -277,7 +280,7 @@ class User(AbstractUser, TimestampedModel):
 
         if self.role == User.RPI:
             if self.graduation_year:
-                chunks.append(f"'{str(self.graduation_year)[2:]}")
+                chunks.append(f"’{str(self.graduation_year)[2:]}")
             if len(chunks) > 0 and self.rcs_id:
                 chunks.append(f"({self.rcs_id})")
             elif self.rcs_id:
@@ -298,21 +301,28 @@ class User(AbstractUser, TimestampedModel):
             and self.discord_user_id
         )
 
+    def get_active_enrollment(self) -> Optional["Enrollment"]:
+        active_semester = cache.get("active_semester")
+        queryset = self.enrollments.filter(semester=active_semester)
+        return queryset.first()
+
     def is_mentor(self, semester=None):
         if semester is None:
-            semester = Semester.get_active()
+            active_enrollment = self.get_active_enrollment()
+            return active_enrollment and active_enrollment.is_mentor
 
-        if semester is None:
-            return False
-
-        return self.mentored_small_groups.filter(semester=semester).count() > 0
+        return (
+            self.enrollments.filter(
+                is_mentor=True,
+                semester=semester,
+            ).count()
+            > 0
+        )
 
     def is_coordinator(self, semester=None):
         if semester is None:
-            semester = Semester.get_active()
-
-        if semester is None:
-            return False
+            active_enrollment = self.get_active_enrollment()
+            return active_enrollment and active_enrollment.is_coordinator
 
         return (
             self.enrollments.filter(
@@ -324,10 +334,8 @@ class User(AbstractUser, TimestampedModel):
 
     def is_faculty_advisor(self, semester=None):
         if semester is None:
-            semester = Semester.get_active()
-
-        if semester is None:
-            return False
+            active_enrollment = self.get_active_enrollment()
+            return active_enrollment and active_enrollment.is_faculty_advisor
 
         return (
             self.enrollments.filter(
@@ -380,10 +388,7 @@ class User(AbstractUser, TimestampedModel):
             return False, "Your account is not approved or active."
 
         # TODO: check deadline
-        if (
-            not semester
-            or not semester.is_active
-        ):
+        if not semester or not semester.is_active:
             return (
                 False,
                 "The current semester is not accepting new projects at this time.",
@@ -419,7 +424,7 @@ class User(AbstractUser, TimestampedModel):
         return self.display_name
 
     objects = UserManager()
-    students = StudentManager()
+    rpi = RPIUserManager()
 
     def clean(self):
         if self.role != User.RPI and self.graduation_year is not None:
@@ -518,6 +523,11 @@ class Project(TimestampedModel):
     homepage_url = models.URLField(
         blank=True,
         help_text="Optional URL to a homepage for the project, potentially where it is publicly deployed or to documentation",
+    )
+
+    logo_url = models.URLField(
+        blank=True,
+        help_text="Optional URL to a logo for the project",
     )
 
     tags = models.ManyToManyField(ProjectTag, blank=True, related_name="projects")
@@ -752,10 +762,11 @@ class ProjectPitch(TimestampedModel):
         return f"{self.semester} {self.project} Pitch: {self.url}"
 
     class Meta:
-        unique_together = (
-            "semester",
-            "project",
-        )
+        constraints = [
+            models.UniqueConstraint(
+                fields=["semester", "project"], name="unique_semester_pitch"
+            )
+        ]
 
 
 class ProjectProposal(TimestampedModel):
@@ -788,10 +799,11 @@ class ProjectProposal(TimestampedModel):
     )
 
     class Meta:
-        unique_together = (
-            "semester",
-            "project",
-        )
+        constraints = [
+            models.UniqueConstraint(
+                fields=["semester", "project"], name="unique_semester_proposal"
+            )
+        ]
 
 
 class ProjectPresentation(TimestampedModel):
@@ -824,10 +836,11 @@ class ProjectPresentation(TimestampedModel):
     )
 
     class Meta:
-        unique_together = (
-            "semester",
-            "project",
-        )
+        constraints = [
+            models.UniqueConstraint(
+                fields=["semester", "project"], name="unique_semester_presentation"
+            )
+        ]
 
 
 class ProjectEnrollmentApplication(TimestampedModel):
@@ -897,6 +910,15 @@ class ProjectEnrollmentApplication(TimestampedModel):
             f"⚠ **{self.project}** has decided to not move forward with your application for the following reason:\n{self.rejection_reason}!"
         )
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["semester", "user"],
+                condition=Q(is_accepted=True),
+                name="unique_accepted_application",
+            )
+        ]
+
 
 class Enrollment(TimestampedModel):
     semester = models.ForeignKey(
@@ -921,6 +943,7 @@ class Enrollment(TimestampedModel):
     )
     is_project_lead = models.BooleanField("project lead?", default=False)
     is_coordinator = models.BooleanField("coordinator?", default=False)
+    is_mentor = models.BooleanField("mentor?", default=False)
     is_faculty_advisor = models.BooleanField("faculty advisor?", default=False)
 
     final_grade = models.DecimalField(
@@ -951,8 +974,18 @@ class Enrollment(TimestampedModel):
         return f"{self.semester.name} - {self.user} - {self.project or 'No project'}"
 
     class Meta:
-        unique_together = ("semester", "user")
-        ordering = ["semester"]
+        indexes = [
+            models.Index(fields=["user", "semester"]),
+            models.Index(fields=["user"]),
+            models.Index(fields=["semester"]),
+            models.Index(fields=["semester", "project"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["semester", "user"], name="unique_semester_enrollment"
+            )
+        ]
+        ordering = ["semester", "user__first_name"]
         get_latest_by = ["semester"]
 
 
@@ -1070,12 +1103,35 @@ class Meeting(TimestampedModel):
         now = timezone.now()
         return self.starts_at < now < self.ends_at
 
+    @property
+    def expected_attendance_users(self):
+        if self.type == Meeting.COORDINATOR:
+            return User.rpi.filter(
+                Q(enrollments__semester=self.semester_id)
+                & (
+                    Q(enrollments__is_coordinator=True)
+                    | Q(enrollments__is_faculty_advisor=True)
+                )
+            )
+        elif self.type == Meeting.MENTOR:
+            return User.rpi.filter(
+                enrollments__semester=self.semester_id, enrollments__is_mentor=True
+            )
+        else:
+            return User.rpi.filter(enrollments__semester=self.semester_id)
+
+    @property
+    def attended_users(self):
+        return self.attendances.filter(meetingattendance__is_verified=True)
+
     @classmethod
-    def get_ongoing(cls):
+    def get_ongoing(cls, user):
         now = timezone.now()
-        return cls.objects.filter(
-            is_published=True, starts_at__lte=now, ends_at__gte=now
-        ).first()
+        return (
+            cls.get_user_queryset(user)
+            .filter(is_published=True, starts_at__lte=now, ends_at__gte=now)
+            .first()
+        )
 
     def get_absolute_url(self):
         return reverse("meetings_detail", args=[str(self.id)])
@@ -1114,14 +1170,26 @@ class Meeting(TimestampedModel):
         return f"{self.display_name} - {formats.date_format(timezone.localtime(self.starts_at), 'D M j Y @ P')}"
 
     @classmethod
-    def get_next(cls):
-        today = timezone.datetime.today()
-        this_morning = timezone.datetime.combine(
-            today, timezone.datetime.min.time(), tzinfo=today.tzinfo
-        )
-        return cls.objects.filter(
-            is_published=True, starts_at__gte=this_morning
-        ).first()
+    def get_user_queryset(cls, user):
+        if user.is_authenticated:
+            active_enrollment = user.get_active_enrollment()
+            queryset = cls.objects
+            if user.is_superuser or (
+                active_enrollment and active_enrollment.is_coordinator
+            ):
+                pass
+            elif active_enrollment and active_enrollment.is_mentor:
+                queryset = queryset.exclude(
+                    is_published=False, type=Meeting.COORDINATOR
+                )
+            else:
+                queryset = queryset.exclude(
+                    is_published=False, type__in=(Meeting.MENTOR, Meeting.COORDINATOR)
+                )
+        else:
+            queryset = cls.public
+
+        return queryset
 
     class Meta:
         ordering = ["starts_at"]
@@ -1141,7 +1209,11 @@ class MeetingAttendance(TimestampedModel):
     )
 
     class Meta:
-        unique_together = ("meeting", "user")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["meeting", "user"], name="unique_meeting_attendance"
+            )
+        ]
 
 
 class MentorApplication(TimestampedModel):
@@ -1173,6 +1245,10 @@ class MentorApplication(TimestampedModel):
         self.is_accepted = True
         self.save()
 
+        Enrollment.objects.update_or_create(
+            user=self.user_id, semester=self.semester_id, defaults={"is_mentor": True}
+        )
+
         # TODO: figure out message
         # self.user.send_message()
 
@@ -1185,6 +1261,13 @@ class MentorApplication(TimestampedModel):
 
         # TODO: figure out message
         # self.user.send_message()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["semester", "user"], name="unique_mentor_application"
+            )
+        ]
 
 
 class SmallGroup(TimestampedModel):
@@ -1256,7 +1339,15 @@ class MeetingAttendanceCode(TimestampedModel):
         return self.code
 
     class Meta:
-        unique_together = ("code", "meeting", "small_group")
+        indexes = [
+            models.Index(fields=["code"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["code", "meeting", "small_group"],
+                name="unique_meeting_attendance_small_group_code",
+            )
+        ]
 
 
 class StatusUpdate(TimestampedModel):

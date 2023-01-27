@@ -11,6 +11,10 @@ class BulmaTextInput(forms.Widget):
 
 
 class UserProfileForm(forms.ModelForm):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.helper = FormHelper()
+
     class Meta:
         model = User
         fields = ["first_name", "last_name", "graduation_year"]
@@ -54,3 +58,8 @@ class SubmitAttendanceForm(forms.Form):
         label="Attendance Code",
         help_text="The attendance code your Mentor or meeting host displayed",
     )
+
+    helper = FormHelper()
+    helper.add_input(Submit("submit", "Submit", css_class="button"))
+    helper.form_method = "POST"
+    helper.form_action = "submit_attendance"
