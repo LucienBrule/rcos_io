@@ -58,11 +58,29 @@ ALLOWED_HOSTS = [
     "new.rcos.io",
 ]
 
+try:
+    # Allows setting dynamic allowed hosts
+    if os.environ["ALLOWED_HOSTS"]:
+        ALLOWED_HOSTS += os.environ["ALLOWED_HOSTS"].split(",")
+except KeyError:
+    print("No ALLOWED_HOSTS environment variable set")
+    pass
+
+
 CSRF_TRUSTED_ORIGINS = [
     "https://rcos.up.railway.app",
     "https://rcosio-staging.up.railway.app",
     "https://new.rcos.io",
 ]
+
+try:
+    # Allows setting dynamic trusted origins
+    if os.environ["CSRF_TRUSTED_ORIGINS"]:
+        CSRF_TRUSTED_ORIGINS += os.environ["CSRF_TRUSTED_ORIGINS"].split(",")
+except KeyError:
+    print("No CSRF_TRUSTED_ORIGINS set")
+    pass
+
 
 PUBLIC_BASE_URL = os.environ["PUBLIC_BASE_URL"]
 

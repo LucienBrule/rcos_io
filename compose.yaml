@@ -1,0 +1,72 @@
+volumes:
+  pg_data:
+    driver: local
+
+services:
+    postgres:
+        image: postgres:12-alpine
+        volumes:
+        - pg_data:/var/lib/postgresql/data:z
+        environment:
+        - POSTGRES_DB=$PGDATABASE
+        - POSTGRES_USER=$PGUSER
+        - POSTGRES_PASSWORD=$PGPASSWORD
+        - POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256
+        # Debug
+        - POSTGRES_AUTH_METHOD=trust
+        ports:
+        - "5432:5432"
+    redis:
+        image: redis:6.2.5
+        ports:
+        - "6379:6379"
+    app:
+        depends_on:
+         - postgres
+         - redis
+        build:
+            context: .
+            dockerfile: Dockerfile
+        image: localhost/rcos/rcos.io:latest
+        ports:
+        - "8000:8000"
+#            volumes:
+#        - ./entrypoint.sh:/app/entrypoint.sh
+#         - $PWD:/app
+#         - /app/venv
+        environment:
+        - PORT=$PORT
+        - BIND_ADDRESS=$BIND_ADDRESS
+        - ALLOWED_HOSTS=$ALLOWED_HOSTS
+        - CSRF_TRUSTED_ORIGINS=$CSRF_TRUSTED_ORIGINS
+        # ref: https://docs.djangoproject.com/en/3.0/ref/django-admin/#django-admin-createsuperuser
+        - DJANGO_SUPERUSER_USERNAME=$DJANGO_SUPERUSER_USERNAME
+        - DJANGO_SUPERUSER_EMAIL=$DJANGO_SUPERUSER_EMAIL
+        - DJANGO_SUPERUSER_PASSWORD=$DJANGO_SUPERUSER_PASSWORD
+        # rcos_io/settings.py
+        - ENV=development
+        # rcos_io/settings.py 130
+        - PGDATABASE=$PGDATABASE
+        - PGUSER=$PGUSER
+        - PGPASSWORD=$PGPASSWORD
+        - PGUSER=$PGUSER
+        - PGPORT=$PGPORT
+        - PGHOST=$PGHOST
+        # rcos_io/settings.py 232
+        - SECRET_KEY=$SECRET_KEY
+        - GITHUB_API_TOKEN=$GITHUB_API_TOKEN
+        - DISCORD_BOT_TOKEN=$DISCORD_BOT_TOKEN
+        - DISCORD_CLIENT_ID=$DISCORD_CLIENT_ID
+        - DISCORD_CLIENT_SECRET=$DISCORD_CLIENT_SECRET
+        - DISCORD_REDIRECT_URL=$DISCORD_REDIRECT_URL
+        - DISCORD_SERVER_ID=$DISCORD_SERVER_ID
+        - DISCORD_VERIFIED_ROLE_ID=$DISCORD_VERIFIED_ROLE_ID
+        - DISCORD_PROJECT_LEAD_ROLE_ID=$DISCORD_PROJECT_LEAD_ROLE_ID
+        - DISCORD_PROJECT_PAIRING_CATEGORY_ID=$DISCORD_PROJECT_PAIRING_CATEGORY_ID
+        - GITHUB_OAUTH_APP_CLIENT_ID=$GITHUB_OAUTH_APP_CLIENT_ID
+        - GITHUB_OAUTH_APP_CLIENT_SECRET=$GITHUB_OAUTH_APP_CLIENT_SECRET
+        - GITHUB_OAUTH_APP_REDIRECT_URL=$GITHUB_OAUTH_APP_REDIRECT_URL
+        - MAILJET_API_KEY=$MAILJET_API_KEY
+        - MAILJET_SECRET_KEY=$MAILJET_SECRET_KEY
+        - PUBLIC_BASE_URL=$PUBLIC_BASE_URL
+        - REDIS_URL=$REDIS_URL
